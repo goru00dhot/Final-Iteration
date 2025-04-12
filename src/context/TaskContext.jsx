@@ -1,4 +1,15 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { db } from '../firebase';
+import {
+  collection,
+  addDoc,
+  deleteDoc,
+  doc,
+  updateDoc,
+  onSnapshot,
+  query,
+  orderBy
+} from 'firebase/firestore';
 
 const TaskContext = createContext();
 
@@ -7,104 +18,110 @@ export const useTaskContext = () => {
 };
 
 export const TaskProvider = ({ children }) => {
-  // Initialize lists from localStorage or with a default list
-  const [lists, setLists] = useState(() => {
-    const savedLists = localStorage.getItem('taskLists');
-    return savedLists ? JSON.parse(savedLists) : [{
-      id: 'default',
-      name: 'My Tasks',
-      tasks: []
-    }];
-  });
-
+  const [lists, setLists] = useState([]);
   const [showCompleted, setShowCompleted] = useState(true);
 
-  // Save lists to localStorage whenever they change
   useEffect(() => {
-    localStorage.setItem('taskLists', JSON.stringify(lists));
-  }, [lists]);
+    const q = query(collection(db, 'lists'), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const listsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setLists(listsData);
+    });
 
-  // List management functions
-  const addList = (name) => {
-    const newList = {
-      id: crypto.randomUUID(),
-      name,
-      tasks: []
-    };
-    setLists(prev => [...prev, newList]);
-    return newList.id;
+    return () => unsubscribe();
+  }, []);
+
+  const addList = async (name) => {
+    try {
+      const docRef = await addDoc(collection(db, 'lists'), {
+        name,
+        tasks: [],
+        createdAt: Date.now()
+      });
+      return docRef.id;
+    } catch (error) {
+      console.error('Error adding list:', error);
+      return null;
+    }
   };
 
-  const deleteList = (listId) => {
-    setLists(prev => prev.filter(list => list.id !== listId));
+  const deleteList = async (listId) => {
+    try {
+      await deleteDoc(doc(db, 'lists', listId));
+    } catch (error) {
+      console.error('Error deleting list:', error);
+    }
   };
 
-  // Task management functions
-  const addTask = (listId, taskData) => {
-    setLists(prev => prev.map(list => {
-      if (list.id === listId) {
-        const newTask = {
-          id: crypto.randomUUID(),
-          ...taskData,
-          status: 'todo',
-          completed: false,
-          createdAt: Date.now()
-        };
-        return {
-          ...list,
-          tasks: [...list.tasks, newTask]
-        };
-      }
-      return list;
-    }));
+  const addTask = async (listId, taskData) => {
+    try {
+      const listRef = doc(db, 'lists', listId);
+      const list = lists.find(l => l.id === listId);
+      const newTask = {
+        id: crypto.randomUUID(),
+        ...taskData,
+        status: 'todo',
+        completed: false,
+        createdAt: Date.now()
+      };
+      
+      await updateDoc(listRef, {
+        tasks: [...list.tasks, newTask]
+      });
+    } catch (error) {
+      console.error('Error adding task:', error);
+    }
   };
 
-  const toggleTaskComplete = (listId, taskId) => {
-    setLists(prev => prev.map(list => {
-      if (list.id === listId) {
-        return {
-          ...list,
-          tasks: list.tasks.map(task =>
-            task.id === taskId ? { 
-              ...task, 
-              completed: !task.completed,
-              status: !task.completed ? 'completed' : 'todo'
-            } : task
-          )
-        };
-      }
-      return list;
-    }));
+  const toggleTaskComplete = async (listId, taskId) => {
+    try {
+      const listRef = doc(db, 'lists', listId);
+      const list = lists.find(l => l.id === listId);
+      const updatedTasks = list.tasks.map(task =>
+        task.id === taskId ? {
+          ...task,
+          completed: !task.completed,
+          status: !task.completed ? 'completed' : 'todo'
+        } : task
+      );
+
+      await updateDoc(listRef, { tasks: updatedTasks });
+    } catch (error) {
+      console.error('Error toggling task:', error);
+    }
   };
 
-  const updateTaskStatus = (listId, taskId, status) => {
-    setLists(prev => prev.map(list => {
-      if (list.id === listId) {
-        return {
-          ...list,
-          tasks: list.tasks.map(task =>
-            task.id === taskId ? { 
-              ...task, 
-              status,
-              completed: status === 'completed'
-            } : task
-          )
-        };
-      }
-      return list;
-    }));
+  const updateTaskStatus = async (listId, taskId, status) => {
+    try {
+      const listRef = doc(db, 'lists', listId);
+      const list = lists.find(l => l.id === listId);
+      const updatedTasks = list.tasks.map(task =>
+        task.id === taskId ? {
+          ...task,
+          status,
+          completed: status === 'completed'
+        } : task
+      );
+
+      await updateDoc(listRef, { tasks: updatedTasks });
+    } catch (error) {
+      console.error('Error updating task status:', error);
+    }
   };
 
-  const deleteTask = (listId, taskId) => {
-    setLists(prev => prev.map(list => {
-      if (list.id === listId) {
-        return {
-          ...list,
-          tasks: list.tasks.filter(task => task.id !== taskId)
-        };
-      }
-      return list;
-    }));
+  const deleteTask = async (listId, taskId) => {
+    try {
+      const listRef = doc(db, 'lists', listId);
+      const list = lists.find(l => l.id === listId);
+      const updatedTasks = list.tasks.filter(task => task.id !== taskId);
+
+      await updateDoc(listRef, { tasks: updatedTasks });
+    } catch (error) {
+      console.error('Error deleting task:', error);
+    }
   };
 
   const getList = (listId) => {
@@ -116,12 +133,10 @@ export const TaskProvider = ({ children }) => {
     if (!list) return [];
     
     const sortedTasks = [...list.tasks].sort((a, b) => {
-      // First sort by status
       const statusOrder = { todo: 0, 'in-progress': 1, completed: 2 };
       if (statusOrder[a.status] !== statusOrder[b.status]) {
         return statusOrder[a.status] - statusOrder[b.status];
       }
-      // Then by priority
       const priorityOrder = { high: 0, medium: 1, low: 2 };
       return priorityOrder[a.priority] - priorityOrder[b.priority];
     });
